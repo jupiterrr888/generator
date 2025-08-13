@@ -1,104 +1,139 @@
-import os, asyncio
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ContentType
-from aiogram.filters import CommandStart, Command
-from aiogram.utils.markdown import hbold
-from aiohttp import web
-from dotenv import load_dotenv
+import asyncio
+import io
+import os
+import tempfile
+from contextlib import contextmanager
 
-from payments import create_checkout_session, stripe_webhook
-from generator import generate_image
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, ContentType, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
+from dotenv import load_dotenv
+import replicate
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
+replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
 bot = Bot(BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher()
 
-# Память на коленке (на проде - Redis/DB)
-STATE = {}          # {user_id: {"style": str}}
-BALANCES = {}       # {user_id: int}  # пополняется из вебхука
+# Память «на коленке»: на проде вынести в Redis/БД
+USER_LAST_PHOTO = {}        # user_id -> bytes последнего селфи
+USER_LAST_PROMPT = {}       # user_id -> краткая идея/подпись
+
+# Набор "крутых" стилей под аватарки (prompt пресеты)
 STYLES = {
-    "anime": "high-quality anime portrait, soft lighting, detailed eyes",
-    "cyberpunk": "cyberpunk portrait, neon lights, rain, bokeh, ultra-detailed",
-    "realistic": "ultra realistic portrait, 85mm lens, soft studio light",
-    "poster": "bold graphic poster, minimal layout, strong typography",
+    "real_raw":        "ultra realistic headshot, RAW photo look, soft studio light, skin texture, natural colors, detailed eyes, shallow depth of field, 85mm lens",
+    "cinematic":       "cinematic portrait, dramatic rim light, volumetric light, film grain, color grading teal and orange, bokeh background",
+    "cyberpunk":       "cyberpunk neon portrait, rainy night, neon reflections, holographic UI elements, high detail, futuristic vibes",
+    "anime":           "high-quality anime portrait, detailed eyes, clean lineart, soft shading, vibrant palette",
+    "pixar3d":         "3d stylized portrait, pixar-like, subsurface scattering, soft key light, studio render, high detail",
+    "vogue":           "editorial fashion portrait, glossy lighting, beauty retouch, professional studio, elegant styling",
+    "lofi_film":       "lofi film portrait, kodak portra feel, soft highlights, muted tones, nostalgic mood",
+    "fantasy_elf":     "fantasy elf portrait, delicate face, ethereal light, intricate accessories, mystical atmosphere",
+    "comic":           "comic book portrait, bold ink lines, halftone shading, high contrast, dynamic look",
+    "pop_art":         "pop art portrait, bold colors, graphic shapes, clean background, poster look",
+    "bw_classic":      "black and white classic portrait, strong contrast, soft key light, timeless look",
+    "poster_graphic":  "graphic poster style portrait, minimal layout, strong typography accents, bold composition"
 }
+
+def styles_keyboard():
+    buttons = []
+    row = []
+    for k in STYLES.keys():
+        row.append(InlineKeyboardButton(text=k, callback_data=f"style:{k}"))
+        if len(row) == 3:
+            buttons.append(row); row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    text = (
-        f"Привет, {hbold(m.from_user.first_name)}!\n\n"
-        "Это AI‑генератор фото.\n"
-        "1) Выбери стиль: /styles\n"
-        "2) Пополни баланс: /buy (10 генераций)\n"
-        "3) Пришли фото и подпиши промпт‑идею.\n\n"
-        f"Баланс: {BALANCES.get(m.from_user.id, 0)}"
+    await m.answer(
+        "👋 Привет! Загрузите <b>своё фото/селфи</b> (как обычное фото).\n"
+        "Потом просто выберите стиль на кнопке — и я пришлю готовую аватарку.\n\n"
+        "Доступные стили: /styles"
     )
-    await m.answer(text)
 
 @dp.message(Command("styles"))
-async def styles(m: Message):
-    s = "\n".join([f"• {k} — {v}" for k,v in STYLES.items()])
-    await m.answer("Доступные стили:\n" + s + "\n\nВыбери: /use_anime, /use_cyberpunk, /use_realistic, /use_poster")
-
-@dp.message(F.text.startswith("/use_"))
-async def use_style(m: Message):
-    style_key = m.text.replace("/use_", "")
-    if style_key not in STYLES:
-        await m.answer("Такого стиля нет. Посмотри /styles")
-        return
-    STATE[m.from_user.id] = {"style": style_key}
-    await m.answer(f"Стиль выбран: {style_key}. Теперь пришли фото и опиши идею (подпись к фото).")
-
-@dp.message(Command("buy"))
-async def buy(m: Message):
-    url = create_checkout_session(m.from_user.id)
-    await m.answer(f"Оплата за 10 генераций: {url}")
+async def list_styles(m: Message):
+    await m.answer("Выберите стиль ниже 👇", reply_markup=styles_keyboard())
 
 @dp.message(F.content_type == ContentType.PHOTO)
-async def handle_photo(m: Message):
-    user_id = m.from_user.id
-    if BALANCES.get(user_id, 0) <= 0:
-        await m.answer("Баланс 0. Пополнить: /buy")
+async def on_photo(m: Message):
+    # Скачиваем исходник в память
+    file = await bot.get_file(m.photo[-1].file_id)
+    photo_bytes = await bot.download_file(file.file_path)
+    b = await photo_bytes.read()
+
+    USER_LAST_PHOTO[m.from_user.id] = b
+    USER_LAST_PROMPT[m.from_user.id] = (m.caption or "").strip()
+
+    await m.answer(
+        "📸 Фото получено!\n"
+        "Теперь выберите стиль — я сгенерирую аватарку.",
+        reply_markup=styles_keyboard()
+    )
+
+@dp.callback_query(F.data.startswith("style:"))
+async def on_style_click(cq: CallbackQuery):
+    user_id = cq.from_user.id
+    key = cq.data.split(":", 1)[1]
+
+    if user_id not in USER_LAST_PHOTO:
+        await cq.message.answer("Сначала пришлите своё фото (селфи).")
+        await cq.answer()
         return
-    st = STATE.get(user_id)
-    if not st or "style" not in st:
-        await m.answer("Сначала выбери стиль: /styles")
+
+    if key not in STYLES:
+        await cq.message.answer("Такого стиля нет. Посмотрите /styles")
+        await cq.answer()
         return
 
-    # Получаем ссылку на максимальное фото
-    file_id = m.photo[-1].file_id
-    f = await bot.get_file(file_id)
-    image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{f.file_path}"
+    await cq.message.answer(f"🎨 Генерирую стиль: <b>{key}</b> … 10–30 сек.")
+    await cq.answer()
 
-    prompt_suffix = m.caption or ""  # подпись к фото как идея
-    prompt = f"{STYLES[st['style']]} {prompt_suffix}".strip()
+    base_prompt = STYLES[key]
+    extra = USER_LAST_PROMPT.get(user_id, "")
+    prompt = (base_prompt + (f", {extra}" if extra else "")).strip()
 
-    await m.answer("Генерирую... это 10–30 секунд.")
     try:
-        out_url = generate_image(prompt=prompt, image_url=image_url)
-        # Списываем 1 генерацию
-        BALANCES[user_id] = BALANCES.get(user_id, 0) - 1
-        await m.answer_photo(out_url, caption=f"Готово!\nБаланс: {BALANCES.get(user_id, 0)}")
+        # Подготовим входной файл как file-like object (без внешних URL)
+        image_bytes = USER_LAST_PHOTO[user_id]
+        image_file = io.BytesIO(image_bytes)
+        image_file.name = "input.jpg"  # имя нужно клиенту для multipart
+
+        # Включим более «натуральный» вид и мягкое смешивание с исходником
+        inputs = {
+            "prompt": prompt,
+            "image_prompt": image_file,            # локальный файл → безопасно
+            "image_prompt_strength": 0.25,         # баланс стиль/композиция
+            "raw": True,                           # более «реалистичный» тон
+            "aspect_ratio": "1:1",                 # аватар-формат
+            # можно поиграть c safety_tolerance (1..6) при необходимости
+        }
+
+        # Вызов модели (последняя версия по умолчанию)
+        output = replicate.run(
+            "black-forest-labs/flux-1.1-pro-ultra",
+            input=inputs
+        )
+
+        # Библиотека возвращает FileOutput; отправляем как photo из памяти
+        if isinstance(output, list):
+            file_output = output[0]
+        else:
+            file_output = output  # на некоторых моделях может быть одиночный
+
+        img_bytes = file_output.read()
+        await bot.send_photo(
+            chat_id=user_id,
+            photo=BufferedInputFile(img_bytes, filename=f"{key}.jpg"),
+            caption=f"Готово! Стиль: {key}"
+        )
+
     except Exception as e:
-        await m.answer(f"Ошибка генерации: {e}\nПроверь промпт или попробуй позже.")
+        await cq.message.answer(f"⚠️ Ошибка генерации: {e}\nПопробуйте другой стиль или другое фото.")
 
-# ---- Web server (вебхуки Stripe и Telegram) ----
-async def on_startup(app: web.Application):
-    app["balances"] = BALANCES
-
-def make_app():
-    app = web.Application()
-    app.router.add_post("/stripe_webhook", stripe_webhook)
-    return app
-
-def main():
-    app = make_app()
-    loop = asyncio.get_event_loop()
-    loop.create_task(dp.start_polling(bot))  # для простоты: long polling
-    web.run_app(app, port=8080)
-
-if __name__ == "__main__":
-    main()
