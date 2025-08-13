@@ -15,8 +15,13 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
 replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 
-bot = Bot(BOT_TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
+logging.basicConfig(level=logging.INFO)
+
 
 # Память «на коленке»: на проде вынести в Redis/БД
 USER_LAST_PHOTO = {}        # user_id -> bytes последнего селфи
@@ -136,4 +141,11 @@ async def on_style_click(cq: CallbackQuery):
 
     except Exception as e:
         await cq.message.answer(f"⚠️ Ошибка генерации: {e}\nПопробуйте другой стиль или другое фото.")
+        
+async def main():
+    logging.info("Starting bot polling on Railway…")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
