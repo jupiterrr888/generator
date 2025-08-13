@@ -9,6 +9,10 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ContentType, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from dotenv import load_dotenv
 import replicate
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+import logging
+
 
 load_dotenv()
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -21,6 +25,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
+
 
 
 # Память «на коленке»: на проде вынести в Redis/БД
