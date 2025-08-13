@@ -71,12 +71,21 @@ async def start(m: Message):
 async def list_styles(m: Message):
     await m.answer("Выберите стиль ниже 👇", reply_markup=styles_keyboard())
 
+
 @dp.message(F.content_type == ContentType.PHOTO)
 async def on_photo(m: Message):
-    # Скачиваем исходник в память
-    file = await bot.get_file(m.photo[-1].file_id)
-    photo_bytes = await bot.download_file(file.file_path)
-    b = await photo_bytes.read()
+    # Скачиваем исходник в память (совместимо с aiogram 3.x)
+    buf = io.BytesIO()
+    try:
+        # предпочтительный способ (есть в aiogram 3.x)
+        await bot.download(m.photo[-1], destination=buf)
+    except Exception:
+        # fallback, если конкретно у тебя нет .download(...)
+        file = await bot.get_file(m.photo[-1].file_id)
+        await bot.download_file(file.file_path, buf)
+
+    buf.seek(0)
+    b = buf.getvalue()  # без await!
 
     USER_LAST_PHOTO[m.from_user.id] = b
     USER_LAST_PROMPT[m.from_user.id] = (m.caption or "").strip()
@@ -86,6 +95,7 @@ async def on_photo(m: Message):
         "Теперь выберите стиль — я сгенерирую аватарку.",
         reply_markup=styles_keyboard()
     )
+
 
 @dp.callback_query(F.data.startswith("style:"))
 async def on_style_click(cq: CallbackQuery):
