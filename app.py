@@ -250,7 +250,7 @@ async def start(m: Message):
         "3) /modes — режим: <b>InstantID</b> / <b>IP-Adapter</b> / <b>FLUX</b>.\n"
         "4) /train — собрать 6–12 фото (файлы) для финетюна → /finish.\n"
         "5) /lora_on, /lora_off — включить/выключить LoRA (если есть finetune).\n"
-        "6) /set_finetune <id> — вручную указать finetune_id (если уже обучен.\n\n"
+        "6) /set_finetune &lt;finetune_id&gt; — вручную указать finetune_id (если уже обучен).\n\n"
         f"Текущий режим: <b>{USER_BACKEND[uid]}</b>"
     )
 
@@ -385,7 +385,7 @@ async def set_finetune(m: Message):
     uid = m.from_user.id
     parts = (m.text or "").split(maxsplit=1)
     if len(parts) < 2:
-        return await m.answer("Использование: /set_finetune <finetune_id>")
+        return await m.answer("Использование: /set_finetune &lt;finetune_id&gt;")
     fid = parts[1].strip()
     USER_LORA[uid] = {"finetune_id": fid, "trigger": f"user_{uid}", "enabled": True, "status": "ready"}
     await m.answer("✅ finetune_id сохранён и включён. Режим FLUX → /styles.")
