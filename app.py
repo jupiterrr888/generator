@@ -157,28 +157,22 @@ def generate_with_flux_finetuned(prompt: str, finetune_id: str, finetune_strengt
     return _to_bytes_from_output(out)
 
 def generate_with_instantid(face_bytes: bytes, prompt: str) -> bytes:
-    # готовим файл из твоих байтов (чтобы не передавать URL)
-    face = io.BytesIO(face_bytes)
-    face.name = "face.jpg"
+    face = io.BytesIO(face_bytes); face.name = "face.jpg"
 
     inputs = {
-        "image": face,                      # как в твоём примере с Replicate
+        "image": face,
         "prompt": prompt,
         "controlnet_conditioning_scale": 0.6,
-        # опционально, если захочешь:
-        # "num_inference_steps": 28,
-        # "guidance_scale": 3.5,
-        # "seed": 0,
     }
 
-    # >>> ТУТ как раз и используется replicate.run <<<
+    # Сборка ref с версией (если задана)
+    ref = INSTANTID_MODEL
     if INSTANTID_VERSION:
-        out = replicate.run(INSTANTID_MODEL, input=inputs, version=INSTANTID_VERSION)
-    else:
-        out = replicate.run(INSTANTID_MODEL, input=inputs)
+        ref = f"{INSTANTID_MODEL}:{INSTANTID_VERSION}"
 
-    # конвертируем ответ (file/url/list) в bytes (у тебя уже есть этот хелпер)
+    out = replicate.run(ref, input=inputs)  # <-- БЕЗ version=...
     return _to_bytes_from_output(out)
+
 
 
 
