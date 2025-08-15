@@ -31,6 +31,7 @@ FINETUNED_MODEL = os.getenv("FINETUNED_MODEL", "black-forest-labs/flux-1.1-pro-u
 
 # Face-lock модели (можно менять на свои)
 INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "grandlineai/instant-id-photorealistic")
+INSTANTID_VERSION = os.getenv("INSTANTID_VERSION", "").strip()
 IPADAPTER_MODEL = os.getenv("IPADAPTER_MODEL", "lucataco/ip-adapter-faceid")
 
 # Тренер LoRA/finetune на Replicate (ЗАДАЙ САМ!)
