@@ -129,7 +129,7 @@ async def on_style_click(cq: CallbackQuery):
         inputs = {
             "prompt": prompt,
             "image_prompt": image_file,            # локальный файл → безопасно
-            "image_prompt_strength": 0.25,         # баланс стиль/композиция
+            "image_prompt_strength": 0.07,         # баланс стиль/композиция
             "raw": True,                           # более «реалистичный» тон
             "aspect_ratio": "1:1",                 # аватар-формат
             # можно поиграть c safety_tolerance (1..6) при необходимости
