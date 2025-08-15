@@ -156,20 +156,29 @@ def generate_with_flux_finetuned(prompt: str, finetune_id: str, finetune_strengt
     return _to_bytes_from_output(out)
 
 def generate_with_instantid(face_bytes: bytes, prompt: str) -> bytes:
-    face = io.BytesIO(face_bytes); face.name = "face.jpg"
+    # готовим файл из твоих байтов (чтобы не передавать URL)
+    face = io.BytesIO(face_bytes)
+    face.name = "face.jpg"
 
     inputs = {
-        "image": face,                      # вместо URL подаём файл
+        "image": face,                      # как в твоём примере с Replicate
         "prompt": prompt,
-        "controlnet_conditioning_scale": 0.6,   # как в твоём примере
-        # при желании: "num_inference_steps": 28, "guidance_scale": 3.5, "seed": 0
+        "controlnet_conditioning_scale": 0.6,
+        # опционально, если захочешь:
+        # "num_inference_steps": 28,
+        # "guidance_scale": 3.5,
+        # "seed": 0,
     }
 
-    # если у тебя есть _replicate_run(ref, inputs, version), используй его:
-    out = _replicate_run(INSTANTID_MODEL, inputs, version=INSTANTID_VERSION)
+    # >>> ТУТ как раз и используется replicate.run <<<
+    if INSTANTID_VERSION:
+        out = replicate.run(INSTANTID_MODEL, input=inputs, version=INSTANTID_VERSION)
+    else:
+        out = replicate.run(INSTANTID_MODEL, input=inputs)
 
-    # файл/URL → bytes (у нас уже есть хелпер)
+    # конвертируем ответ (file/url/list) в bytes (у тебя уже есть этот хелпер)
     return _to_bytes_from_output(out)
+
 
 
 def generate_with_ipadapter(face_bytes: bytes, prompt: str) -> bytes:
