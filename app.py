@@ -30,7 +30,7 @@ FLUX_MODEL = os.getenv("FLUX_MODEL", "black-forest-labs/flux-1.1-pro-ultra")
 FINETUNED_MODEL = os.getenv("FINETUNED_MODEL", "black-forest-labs/flux-1.1-pro-ultra-finetuned")
 
 # Face-lock модели (можно менять на свои)
-INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "zsxkib/instant-id")
+INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "grandlineai/instant-id-photorealistic")
 IPADAPTER_MODEL = os.getenv("IPADAPTER_MODEL", "lucataco/ip-adapter-faceid")
 
 # Тренер LoRA/finetune на Replicate (ЗАДАЙ САМ!)
@@ -157,17 +157,20 @@ def generate_with_flux_finetuned(prompt: str, finetune_id: str, finetune_strengt
 
 def generate_with_instantid(face_bytes: bytes, prompt: str) -> bytes:
     face = io.BytesIO(face_bytes); face.name = "face.jpg"
-    out = replicate.run(INSTANTID_MODEL, input={
-        "image": face,   # у большинства портов InstantID так называется вход
+
+    inputs = {
+        "image": face,                      # вместо URL подаём файл
         "prompt": prompt,
-        # при необходимости можно добавить регуляторы версии модели:
-        # "controlnet_conditioning_scale": 0.8,
-        # "ip_adapter_scale": 0.8,
-        # "num_inference_steps": 28,
-        # "guidance_scale": 3.5,
-        # "seed": 0,
-    })
+        "controlnet_conditioning_scale": 0.6,   # как в твоём примере
+        # при желании: "num_inference_steps": 28, "guidance_scale": 3.5, "seed": 0
+    }
+
+    # если у тебя есть _replicate_run(ref, inputs, version), используй его:
+    out = _replicate_run(INSTANTID_MODEL, inputs, version=INSTANTID_VERSION)
+
+    # файл/URL → bytes (у нас уже есть хелпер)
     return _to_bytes_from_output(out)
+
 
 def generate_with_ipadapter(face_bytes: bytes, prompt: str) -> bytes:
     face = io.BytesIO(face_bytes); face.name = "face.jpg"
