@@ -1,423 +1,350 @@
+"""
+TG Avatar Bot: InstantID (SDXL) + FLUX-dev PuLID
+
+- aiogram v3
+- replicate python client
+- Inline UI: engine selection, style selection, one-click 10-pack
+
+ENV:
+  BOT_TOKEN=...
+  REPLICATE_API_TOKEN=...
+  # Model slugs (examples; set your own working versions)
+  REPLICATE_MODEL_INSTANTID=owner/model-instantid-sdxl:version
+  REPLICATE_MODEL_PULID=bytedance/flux-pulid:latest
+
+Install:
+  pip install aiogram~=3.6 replicate~=0.25 python-dotenv~=1.0
+Run:
+  python app.py
+"""
+
 import asyncio
-import io
 import os
-import logging
-import zipfile
-import tempfile
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, Command
-from aiogram.types import (
-    Message, ContentType, InlineKeyboardMarkup, InlineKeyboardButton,
-    CallbackQuery, BufferedInputFile
-)
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message, InputMediaPhoto)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-
-import requests
 import replicate
 
-# ===================== ENV =====================
 load_dotenv()
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-REPLICATE_API_TOKEN = os.environ["REPLICATE_API_TOKEN"]
 
-# Бэкенды и модели: можно переопределить через ENV в Railway
-FLUX_MODEL = os.getenv("FLUX_MODEL", "black-forest-labs/flux-1.1-pro-ultra")
-# Для финетюнов (только если используешь тренер, дающий finetune_id)
-FINETUNED_MODEL = os.getenv("FINETUNED_MODEL", "black-forest-labs/flux-1.1-pro-ultra-finetuned")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+MODEL_INSTANTID = os.getenv("REPLICATE_MODEL_INSTANTID", "")
+MODEL_PULID = os.getenv("REPLICATE_MODEL_PULID", "bytedance/flux-pulid:latest")
 
-# Face-lock модели (можно менять на свои)
-INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "grandlineai/instant-id-photorealistic")
-INSTANTID_VERSION = os.getenv("INSTANTID_VERSION", "").strip()
-IPADAPTER_MODEL = os.getenv("IPADAPTER_MODEL", "lucataco/ip-adapter-faceid")
+if not BOT_TOKEN:
+    raise SystemExit("Please set BOT_TOKEN in .env")
+if not REPLICATE_API_TOKEN:
+    raise SystemExit("Please set REPLICATE_API_TOKEN in .env")
+if not MODEL_INSTANTID:
+    # You can leave empty while wiring; bot will hide InstantID engine until set
+    print("[WARN] REPLICATE_MODEL_INSTANTID not set — InstantID engine will be hidden.")
 
-# Тренер LoRA/finetune на Replicate (ЗАДАЙ САМ!)
-# Оставь пустым, если тренер ещё не выбран — /finish аккуратно сообщит об этом
-LORA_TRAINER_MODEL = os.getenv("LORA_TRAINER_MODEL", "")  # пример: "black-forest-labs/flux-pro-trainer"
-
-# Как подмешивается LoRA в обычный FLUX (если тренер возвращает URL весов)
-LORA_APPLY_PARAM = os.getenv("LORA_APPLY_PARAM", "lora_urls")  # или "adapters" в зависимости от модели
-LORA_SCALE_DEFAULT = float(os.getenv("LORA_SCALE_DEFAULT", "0.7"))
-
-# ===================== SDK / BOT =====================
+bot = Bot(BOT_TOKEN, parse_mode="HTML")
+dp = Dispatcher(storage=MemoryStorage())
 replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
-logging.basicConfig(level=logging.INFO)
 
-# ===================== IN-MEMORY STATE (на проде вынеси в Redis/DB) =====================
-USER_LAST_PHOTO: Dict[int, bytes] = {}
-USER_LAST_PROMPT: Dict[int, str] = {}
-USER_BACKEND: Dict[int, str] = {}   # "instantid" | "ipadapter" | "flux"
-USER_TRAIN_SET: Dict[int, List[bytes]] = {}
-# Вариант 1 (без finetune_id): {"url": str|None, "enabled": bool, "status": "none|training|ready|failed"}
-# Вариант 2 (с finetune_id):   {"finetune_id": str|None, "trigger": str|None, "enabled": bool, "status": "..."}
-USER_LORA: Dict[int, Dict[str, Any]] = {}
+# ----------------------------
+# Style Library (curated)
+# ----------------------------
+# NOTE: Keep short, descriptive. Avoid "noir/pixar/anime" as requested earlier.
+STYLES: Dict[str, str] = {
+    # Realistic / Photo
+    "cinematic": "dramatic cinematic portrait, film still, shallow depth of field, 85mm, bokeh, rich color grading",
+    "film35": "35mm film photo look, subtle grain, natural skin tones, halation",
+    "editorial_bw": "high-end editorial black and white, soft contrast, fine tonality, studio quality",
+    "headshot_linkedin": "clean corporate headshot, soft key light, neutral background, natural retouch, professional",
 
-# ===================== STYLES (расширенный набор) =====================
-STYLES: Dict[str, Dict[str, str]] = {
-    "real_raw": {"prompt": "ultra realistic headshot, RAW photo look, soft studio light, skin texture, natural colors, detailed eyes, shallow depth of field, 85mm lens"},
-    "cinematic": {"prompt": "cinematic portrait, dramatic rim light, volumetric light, film grain, teal and orange color grading, background bokeh"},
-    "cyberpunk": {"prompt": "cyberpunk neon portrait, rainy night, neon reflections, holographic HUD, high detail, futuristic vibes"},
-    "anime": {"prompt": "masterpiece, best quality, high-quality anime portrait, detailed irises, clean lineart, soft shading, vibrant palette"},
-    "pixar3d": {"prompt": "3d stylized pixar-like portrait, subsurface scattering, soft key light, studio render, highly detailed, glossy skin"},
-    "vogue": {"prompt": "editorial fashion portrait, glossy lighting, beauty retouch, professional studio, elegant styling, magazine cover look"},
-    "lofi_film": {"prompt": "lofi film portrait, kodak portra vibes, soft highlights, muted tones, nostalgic mood, film grain subtle"},
-    "fantasy_elf": {"prompt": "fantasy elf portrait, ethereal rim light, delicate face, intricate accessories, mystical forest atmosphere"},
-    "comic": {"prompt": "comic book portrait, bold ink lines, halftone shading, high contrast, dynamic pose, graphic look"},
-    "pop_art": {"prompt": "pop art portrait, bold colors, graphic shapes, clean background, posterized look, contemporary design"},
-    "bw_classic": {"prompt": "black and white classic portrait, strong contrast, soft key light, timeless look, studio photography"},
-    "poster_graphic": {"prompt": "graphic poster style portrait, minimal layout, strong typography accents, bold composition, color blocking"},
-    "studio_beauty": {"prompt": "beauty studio portrait, clamshell lighting, glossy skin, catchlights in the eyes, editorial makeup"},
-    "noir": {"prompt": "film noir portrait, hard light, dramatic shadows, moody atmosphere, vintage cinematic look"},
-    "baroque": {"prompt": "baroque oil painting portrait, chiaroscuro, rich textures, ornate details, museum quality"}
+    # Fashion / Beauty
+    "fashion": "glossy fashion editorial, studio flash, beauty lighting, magazine cover aesthetic, high detail skin",
+    "beauty_soft": "beauty portrait, softbox light, smooth gradients, delicate skin texture",
+
+    # Painterly / Traditional Art
+    "oil_impasto": "oil painting impasto, thick textured brush strokes, museum lighting, intricate details",
+    "watercolor_ink": "watercolor and ink, paper texture, soft bleed, hand-drawn outlines",
+    "pencil_drawing": "fine graphite pencil drawing, cross-hatching, paper texture, realistic",
+    "pastel_dream": "soft pastel painting, velvety texture, gentle transitions, fine art look",
+
+    # Graphic / Stylized
+    "comic_halftone": "bold comic illustration, halftone shading, inking lines, print texture",
+    "poster_pop": "bold poster design, geometric shapes, clean vectors, modern pop-graphic style",
+    "sticker_cutout": "sticker style, white cutout border, flat shading, playful",
+
+    # 3D / CG
+    "clay_3d": "3d clay sculpt render, single key light, subtle subsurface scattering, matte clay material",
+    "toon_3d_clean": "clean 3D toon render, simple materials, soft GI, smooth edges",
+
+    # Retro / Aesthetic
+    "vaporwave": "80s retrofuturism vaporwave, neon gradients, grid horizon, palm trees",
+    "y2k_gloss": "Y2K glossy aesthetic, chrome accents, plastic sheen, iridescent",
+
+    # Worlds / Moods
+    "cyberpunk": "moody neon city at night, rain reflections, high contrast, dystopian vibes",
+    "steampunk": "ornate brass and leather, valves, patina, vintage workshop ambiance",
+    "dark_fantasy": "dark fantasy portrait, atmospheric fog, dramatic rim light, epic mood",
+    "nature_fineart": "fine art natural setting, soft overcast light, shallow depth, gentle color palette",
+    "desert_gold": "golden desert light, warm sunset tones, dust haze, cinematic framing",
+
+    # Design / Product-ish
+    "isometric": "isometric game art render, soft global illumination, clean edges, subtle shadows",
+    "minimal_mag": "minimal editorial layout, lots of negative space, typography-driven composition",
 }
 
-def styles_keyboard() -> InlineKeyboardMarkup:
-    buttons, row = [], []
-    for k in STYLES.keys():
-        row.append(InlineKeyboardButton(text=k, callback_data=f"style:{k}"))
-        if len(row) == 3:
-            buttons.append(row); row = []
-    if row:
-        buttons.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# Packs (curated groups of styles)
+PACKS: Dict[str, List[str]] = {
+    "starter10": [
+        "cinematic", "cyberpunk", "fashion", "watercolor_ink", "oil_impasto",
+        "vaporwave", "isometric", "steampunk", "clay_3d", "film35",
+    ],
+    "real6": ["cinematic", "film35", "headshot_linkedin", "editorial_bw", "beauty_soft", "nature_fineart"],
+    "art6": ["oil_impasto", "watercolor_ink", "pencil_drawing", "pastel_dream", "poster_pop", "comic_halftone"],
+    "future6": ["cyberpunk", "steampunk", "vaporwave", "y2k_gloss", "clay_3d", "toon_3d_clean"],
+}
 
-def modes_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🔒 InstantID (1 фото)", callback_data="mode:instantid"),
-            InlineKeyboardButton(text="🔒 IP-Adapter", callback_data="mode:ipadapter"),
-            InlineKeyboardButton(text="🎨 FLUX", callback_data="mode:flux"),
-        ]
-    ])
+# ----------------------------
+# UI Helpers
+# ----------------------------
 
-# ===================== HELPERS =====================
-def _to_bytes_from_output(output: Any) -> bytes:
-    """Replicate может вернуть url, список, file-like. Приводим к bytes."""
-    obj = output[0] if isinstance(output, list) else output
-    if hasattr(obj, "read"):
-        return obj.read()
-    if isinstance(obj, str) and obj.startswith("http"):
-        r = requests.get(obj, timeout=60)
-        r.raise_for_status()
-        return r.content
-    raise RuntimeError("Unknown output type from Replicate model")
+def engine_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if MODEL_INSTANTID:
+        kb.button(text="InstantID / SDXL", callback_data="engine:instantid")
+    kb.button(text="FLUX ID (PuLID)", callback_data="engine:pulid")
+    kb.adjust(1)
+    return kb.as_markup()
 
-async def _download_as_bytes(message: Message) -> bytes:
-    """Скачать изображение (photo/document) как bytes; для document Телега не сжимает."""
-    buf = io.BytesIO()
-    if message.content_type == ContentType.PHOTO:
-        await bot.download(message.photo[-1], destination=buf)
-    elif message.content_type == ContentType.DOCUMENT:
-        await bot.download(message.document, destination=buf)
+
+def style_kb(include_pack: bool = True) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for key in STYLES.keys():
+        kb.button(text=key, callback_data=f"style:{key}")
+    if include_pack:
+        kb.button(text="🎁 10‑пак (Starter)", callback_data="pack:starter10")
+        kb.button(text="📦 Пакеты…", callback_data="packs:menu")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def packs_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for pack_id in PACKS.keys():
+        kb.button(text=pack_id, callback_data=f"pack:{pack_id}")
+    kb.button(text="⬅️ Назад к стилям", callback_data="packs:back")
+    kb.adjust(2)
+    return kb.as_markup()
+
+# ----------------------------
+# Replicate wrappers
+# ----------------------------
+
+def _replicate_run(model: str, inputs: dict, *, flatten: bool = True):
+    """Sync call; run in a thread when used from async handlers."""
+    output = replicate_client.run(model, input=inputs)
+    if flatten and isinstance(output, list):
+        return output[0]
+    return output[0]
+    return output
+
+
+def build_common_prompts(style_prompt: str, engine: str):
+    if engine == "instantid":
+        if not MODEL_INSTANTID:
+            raise RuntimeError("InstantID engine not configured. Set REPLICATE_MODEL_INSTANTID.")
+        url = await asyncio.to_thread(gen_instantid_v2, image_url, style_prompt)
+        return [url]
     else:
-        raise ValueError("Unsupported content type for image download")
-    buf.seek(0)
-    return buf.getvalue()
+        urls = await asyncio.to_thread(gen_pulid, image_url, style_prompt, seed, w, h, variations)
+        return urls
+    return [raw]
 
-# ===================== GENERATORS =====================
-def generate_with_flux(image_bytes: bytes, prompt: str, lora_url: Optional[str] = None, lora_scale: float = LORA_SCALE_DEFAULT) -> bytes:
-    image_file = io.BytesIO(image_bytes); image_file.name = "input.jpg"
-    inputs: Dict[str, Any] = {
-        "prompt": prompt,
-        "image_prompt": image_file,
-        "image_prompt_strength": 0.7,   # усилили влияние референса (для сходства)
-        "raw": True,
-        "aspect_ratio": "1:1",
-    }
-    # Если есть LoRA-URL (модели, поддерживающие подмешивание весов)
-    if lora_url:
-        if LORA_APPLY_PARAM == "lora_urls":
-            inputs["lora_urls"] = [lora_url]
-            inputs["lora_scales"] = [lora_scale]  # если модель поддерживает
-        elif LORA_APPLY_PARAM == "adapters":
-            inputs["adapters"] = [{"path": lora_url, "weight": lora_scale}]
-        else:
-            inputs["lora_urls"] = [lora_url]
 
-    out = replicate.run(FLUX_MODEL, input=inputs)
-    return _to_bytes_from_output(out)
-
-def generate_with_flux_finetuned(prompt: str, finetune_id: str, finetune_strength: float = 1.0) -> bytes:
-    """Инференс по finetune_id (если используешь модель вида *-finetuned)."""
-    out = replicate.run(
-        FINETUNED_MODEL,
-        input={
-            "prompt": prompt,
-            "finetune_id": finetune_id,           # обязателен
-            "finetune_strength": finetune_strength,  # 0..2 (варьируй 0.7–1.2)
-            "raw": True,
-            "aspect_ratio": "1:1",
-        }
-    )
-    return _to_bytes_from_output(out)
-
-def generate_with_instantid(face_bytes: bytes, prompt: str) -> bytes:
-    face = io.BytesIO(face_bytes); face.name = "face.jpg"
-
+def gen_instantid_v2(
+    image_url: str,
+    style_prompt: str,
+    cc_scale: float = 0.6,
+    model_slug: str = MODEL_INSTANTID,
+) -> str:
+    """InstantID photorealistic minimal schema.
+    Uses: image, prompt, controlnet_conditioning_scale
+    Returns: direct URL string.
+    """
+    prompt = f"{style_prompt}"
     inputs = {
-        "image": face,
+        "image": image_url,
         "prompt": prompt,
-        "controlnet_conditioning_scale": 0.6,
+        "controlnet_conditioning_scale": cc_scale,
     }
-
-    # Сборка ref с версией (если задана)
-    ref = INSTANTID_MODEL
-    if INSTANTID_VERSION:
-        ref = f"{INSTANTID_MODEL}:{INSTANTID_VERSION}"
-
-    out = replicate.run(ref, input=inputs)  # <-- БЕЗ version=...
-    return _to_bytes_from_output(out)
-
-
-
-
-def generate_with_ipadapter(face_bytes: bytes, prompt: str) -> bytes:
-    face = io.BytesIO(face_bytes); face.name = "face.jpg"
-    # У разных портов поля могут отличаться — пробуем 2 варианта
+    raw = _replicate_run(model_slug, inputs, flatten=False)
     try:
-        out = replicate.run(IPADAPTER_MODEL, input={"face_image": face, "prompt": prompt})
+        return raw.url()
     except Exception:
-        out = replicate.run(IPADAPTER_MODEL, input={"image": face, "prompt": prompt})
-    return _to_bytes_from_output(out)
+        return str(raw)
 
-# ===================== LORA / FINETUNE TRAINING =====================
-def _train_flux_finetune_sync(image_bytes_list: List[bytes], caption_prefix: str) -> str:
-    """
-    Синхронный запуск тренера на Replicate.
-    ВАЖНО: поля inputs зависят от конкретной модели-тренера. Ниже пробуем несколько распространённых.
-    Открой страницу твоего тренера на Replicate и при необходимости подгони имена полей.
-    """
-    # Собираем ZIP с картинками
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-        with zipfile.ZipFile(tmp, "w") as zf:
-            for i, b in enumerate(image_bytes_list):
-                zf.writestr(f"img_{i:02d}.jpg", b)
-        tmp.flush()
-        zip_path = tmp.name
+# ----------------------------
+# State
+# ----------------------------
+@dataclass
+class UserSession:
+    ref_image_url: str = ""
+    engine: str = "instantid"  # or "pulid"
+    width: int = 1024
+    height: int = 1024
 
-    if not LORA_TRAINER_MODEL:
-        raise RuntimeError("LORA_TRAINER_MODEL is not set. Configure a trainer model on Replicate first.")
 
-    # Пытаемся вызвать тренер с разными ключами датасета
-    trainer_inputs_variants = [
-        {"input_images": open(zip_path, "rb"), "caption_prefix": caption_prefix},
-        {"images_zip": open(zip_path, "rb"), "caption_prefix": caption_prefix},
-        {"dataset": open(zip_path, "rb"), "caption_prefix": caption_prefix},
-        {"images": open(zip_path, "rb"), "caption_prefix": caption_prefix},
-    ]
+# ----------------------------
+# Helpers
+# ----------------------------
+async def get_telegram_file_url(message: Message) -> str:
+    """Build a public file URL so Replicate can fetch it."""
+    photo = message.photo[-1]  # largest
+    f = await bot.get_file(photo.file_id)
+    # Telegram File API: https://api.telegram.org/file/bot<token>/<file_path>
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{f.file_path}"
+    return url
 
-    last_exc = None
-    for inp in trainer_inputs_variants:
-        try:
-            out = replicate.run(LORA_TRAINER_MODEL, input=inp)
-            # Ожидаем либо finetune_id (str), либо dict c ключом
-            if isinstance(out, str):
-                return out
-            if isinstance(out, dict):
-                # На некоторых тренерах ключ может называться по-разному
-                for k in ("finetune_id", "id", "model_id"):
-                    if k in out and isinstance(out[k], str):
-                        return out[k]
-            if isinstance(out, list) and out and isinstance(out[0], str):
-                return out[0]
-        except Exception as e:
-            last_exc = e
-            continue
 
-    raise RuntimeError(f"Trainer call failed / unexpected output. Last error: {last_exc}")
+async def generate_single(engine: str, image_url: str, style_key: str, seed: int = 0, w: int = 1024, h: int = 1024, variations: int = 1) -> List[str]:
+    sem = asyncio.Semaphore(4)
 
-async def _train_and_notify(uid: int, imgs: List[bytes]):
-    """Фоновые обучение finetune, чтобы не блокировать бота."""
-    trigger = f"user_{uid}"  # будет рекомендовано добавлять в prompt
-    loop = asyncio.get_running_loop()
-    try:
-        finetune_id = await loop.run_in_executor(None, lambda: _train_flux_finetune_sync(imgs, trigger))
-        USER_LORA[uid] = {"finetune_id": finetune_id, "trigger": trigger, "enabled": True, "status": "ready"}
-        await bot.send_message(uid, f"✅ Финетюн готов и включён!\nID: <code>{finetune_id}</code>\nРежим: FLUX → /styles → стиль.")
-    except Exception as e:
-        USER_LORA[uid] = {"finetune_id": None, "trigger": None, "enabled": False, "status": "failed"}
-        logging.exception("LoRA/finetune training failed")
-        await bot.send_message(uid, f"⚠️ Ошибка тренировки: {e}\nПроверь тренер (LORA_TRAINER_MODEL) и формат входов.")
+    async def worker(idx: int, style_key: str) -> str:
+        async with sem:
+            return await generate_single(engine, image_url, style_key, seed_base + idx, w, h)
 
-# ===================== HANDLERS =====================
+    tasks = [worker(i, k) for i, k in enumerate(styles)]
+    return await asyncio.gather(*tasks)
+
+
+# ----------------------------
+# Handlers
+# ----------------------------
 @dp.message(CommandStart())
-async def start(m: Message):
-    uid = m.from_user.id
-    USER_BACKEND.setdefault(uid, "instantid")
-    USER_LORA.setdefault(uid, {"finetune_id": None, "trigger": None, "enabled": False, "status": "none"})
-    await m.answer(
-        "👋 Привет! Это AI-аватар-бот.\n\n"
-        "1) Пришли своё фото (лучше как <b>файл</b> — без сжатия).\n"
-        "2) /styles — выбери стиль.\n"
-        "3) /modes — режим: <b>InstantID</b> / <b>IP-Adapter</b> / <b>FLUX</b>.\n"
-        "4) /train — собрать 6–12 фото (файлы) для финетюна → /finish.\n"
-        "5) /lora_on, /lora_off — включить/выключить LoRA (если есть finetune).\n"
-        "6) /set_finetune &lt;finetune_id&gt; — вручную указать finetune_id (если уже обучен).\n\n"
-        f"Текущий режим: <b>{USER_BACKEND[uid]}</b>"
+async def on_start(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Загрузи <b>1 фото лица</b> (фронтально, хороший свет) — дальше выберем движок и стиль.")
+
+
+@dp.message(F.photo)
+async def on_photo(message: Message, state: FSMContext):
+    image_url = await get_telegram_file_url(message)
+    await state.update_data(session=UserSession(ref_image_url=image_url).__dict__)
+
+    text = (
+        "Фото получено! Выбери движок:\n"
+        "• <b>InstantID / SDXL</b> — быстрый, предсказуемый (по умолчанию).\n"
+        "• <b>FLUX ID (PuLID)</b> — модный FLUX‑лук, иногда каприз к промптам."
     )
+    await message.answer(text, reply_markup=engine_kb())
 
-@dp.message(Command("styles"))
-async def list_styles(m: Message):
-    await m.answer("Выбери стиль ниже 👇", reply_markup=styles_keyboard())
 
-@dp.message(Command("modes"))
-async def modes(m: Message):
-    await m.answer("Выбери режим. Рекомендация: InstantID для сходства из 1 фото.", reply_markup=modes_keyboard())
+@dp.callback_query(F.data.startswith("engine:"))
+async def on_engine(call: CallbackQuery, state: FSMContext):
+    engine = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    session = UserSession(**data.get("session", {}))
+    session.engine = engine
+    await state.update_data(session=session.__dict__)
 
-@dp.callback_query(F.data.startswith("mode:"))
-async def switch_mode(cq: CallbackQuery):
-    uid = cq.from_user.id
-    mode = cq.data.split(":", 1)[1]
-    USER_BACKEND[uid] = mode
-    await cq.message.answer(f"Режим переключён на: <b>{mode}</b>")
-    await cq.answer()
+    await call.message.answer(
+        f"Движок: <b>{'InstantID / SDXL' if engine=='instantid' else 'FLUX ID (PuLID)'}</b>\n"
+        "Выбери стиль или нажми на пак:",
+        reply_markup=style_kb(include_pack=True)
+    )
+    await call.answer()
 
-@dp.message(F.content_type == ContentType.PHOTO)
-async def on_photo(m: Message):
-    b = await _download_as_bytes(m)
-    USER_LAST_PHOTO[m.from_user.id] = b
-    USER_LAST_PROMPT[m.from_user.id] = (m.caption or "").strip()
-    await m.answer("📸 Фото получено. Нажми /styles и выбери стиль.")
-
-@dp.message(F.content_type == ContentType.DOCUMENT, F.document.mime_type.in_({"image/jpeg","image/png"}))
-async def on_image_doc(m: Message):
-    b = await _download_as_bytes(m)  # без сжатия
-    USER_LAST_PHOTO[m.from_user.id] = b
-    USER_LAST_PROMPT[m.from_user.id] = (m.caption or "").strip()
-    await m.answer("📎 Изображение получено без сжатия. Нажми /styles и выбери стиль.")
 
 @dp.callback_query(F.data.startswith("style:"))
-async def on_style_click(cq: CallbackQuery):
-    uid = cq.from_user.id
-    key = cq.data.split(":", 1)[1]
-    if uid not in USER_LAST_PHOTO:
-        await cq.message.answer("Сначала пришли своё фото.")
-        return await cq.answer()
-    if key not in STYLES:
-        await cq.message.answer("Такого стиля нет. Посмотри /styles")
-        return await cq.answer()
+async def on_style(call: CallbackQuery, state: FSMContext):
+    style_key = call.data.split(":", 1)[1]
+    if style_key not in STYLES:
+        await call.answer("Неизвестный стиль", show_alert=True)
+        return
 
-    base_prompt = STYLES[key]["prompt"]
-    extra = USER_LAST_PROMPT.get(uid, "")
-    prompt = (base_prompt + (f", {extra}" if extra else "")).strip()
+    data = await state.get_data()
+    session = UserSession(**data.get("session", {}))
+    if not session.ref_image_url:
+        await call.answer("Сначала загрузите фото.", show_alert=True)
+        return
 
-    info = USER_LORA.get(uid)
-    backend = USER_BACKEND.get(uid, "instantid")
+    await call.message.answer(f"Генерирую: <b>{style_key}</b> …")
+    try:
+        urls = await generate_single(session.engine, session.ref_image_url, style_key)
+    except Exception as e:
+        await call.message.answer(f"Ошибка генерации: {e}")
+        await call.answer()
+        return
 
-    await cq.message.answer(f"🎨 Генерирую: <b>{key}</b> … 10–40 сек.")
-    await cq.answer()
+    if len(urls) == 1:
+        await call.message.answer_photo(urls[0], caption=f"{style_key}")
+    else:
+        media = [InputMediaPhoto(media=u, caption=f"{style_key} #{i+1}") for i, u in enumerate(urls)]
+        await call.message.answer_media_group(media)
+    await call.answer()
+        return
+
+    await call.message.answer_photo(url, caption=f"{style_key}")
+    await call.answer()
+
+
+@dp.callback_query(F.data == "packs:menu")
+async def on_packs_menu(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_reply_markup(reply_markup=packs_kb())
+    await call.answer()
+
+
+@dp.callback_query(F.data == "packs:back")
+async def on_packs_back(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_reply_markup(reply_markup=style_kb(include_pack=True))
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("pack:"))
+async def on_pack(call: CallbackQuery, state: FSMContext):
+    pack_id = call.data.split(":", 1)[1]
+    if pack_id not in PACKS:
+        await call.answer("Неизвестный пак", show_alert=True)
+        return
+
+    data = await state.get_data()
+    session = UserSession(**data.get("session", {}))
+    if not session.ref_image_url:
+        await call.answer("Сначала загрузите фото.", show_alert=True)
+        return
+
+    styles = PACKS[pack_id]
+    await call.message.answer(f"Генерирую пак <b>{pack_id}</b> из {len(styles)} изображений…")
 
     try:
-        # Если выбран FLUX и есть готовый finetune_id — используем его (TEXT→IMG)
-        if backend == "flux" and info and info.get("enabled") and info.get("status") == "ready" and info.get("finetune_id"):
-            trigger = info.get("trigger") or ""
-            prompt_ft = (f"{trigger}, {prompt}").strip(", ")
-            img_bytes = generate_with_flux_finetuned(prompt_ft, info["finetune_id"], finetune_strength=0.9)
-        else:
-            # Иначе — face-lock или обычная стилизация FLUX с image_prompt
-            face_bytes = USER_LAST_PHOTO[uid]
-            if backend == "instantid":
-                img_bytes = generate_with_instantid(face_bytes, prompt)
-            elif backend == "ipadapter":
-                img_bytes = generate_with_ipadapter(face_bytes, prompt)
-            else:  # обычный FLUX
-                # если ты используешь LoRA-URL вместо finetune_id, можно подмешивать сюда:
-                lora_url = info.get("url") if info else None
-                img_bytes = generate_with_flux(face_bytes, prompt, lora_url=lora_url)
-
-        await bot.send_photo(
-            chat_id=uid,
-            photo=BufferedInputFile(img_bytes, filename=f"{key}.jpg"),
-            caption=f"Готово! Режим: {backend}  |  Стиль: {key}"
-        )
+        urls = await generate_pack(session.engine, session.ref_image_url, styles)
     except Exception as e:
-        logging.exception("Generation error")
-        await cq.message.answer(f"⚠️ Ошибка генерации: {e}\nПопробуй другой стиль/режим или другое фото.")
+        await call.message.answer(f"Ошибка генерации пака: {e}")
+        await call.answer()
+        return
 
-# ======== FINETUNE/LoRA FLOW ========
-@dp.message(Command("train"))
-async def cmd_train(m: Message):
-    uid = m.from_user.id
-    USER_TRAIN_SET[uid] = []
-    USER_LORA.setdefault(uid, {"finetune_id": None, "trigger": None, "enabled": False, "status": "none"})
-    await m.answer(
-        "Загрузи 6–12 фото как <b>файлы</b> (скрепка → файл). Когда закончишь, напиши /finish.\n"
-        "Советы: разные ракурсы, свет, эмоции; лицо крупно; без тяжёлых фильтров."
-    )
+    # Telegram allows 2-10 images in a media group
+    media = [InputMediaPhoto(media=u, caption=styles[i]) for i, u in enumerate(urls)]
+    await call.message.answer_media_group(media)
+    await call.answer()
 
-@dp.message(Command("finish"))
-async def start_training(m: Message):
-    uid = m.from_user.id
-    imgs = USER_TRAIN_SET.get(uid, [])
-    if len(imgs) < 6:
-        return await m.answer("Нужно минимум 6 фото. Дозагрузи и снова /finish.")
 
-    if not LORA_TRAINER_MODEL:
-        return await m.answer(
-            "⚠️ Тренер не настроен (переменная LORA_TRAINER_MODEL пустая).\n"
-            "Задай её в Railway → Variables (пример: black-forest-labs/flux-pro-trainer) и повтори."
-        )
-
-    USER_LORA[uid] = {"finetune_id": None, "trigger": None, "enabled": False, "status": "training"}
-    await m.answer("🚀 Запускаю обучение финетюна… Я напишу, когда будет готово.")
-    asyncio.create_task(_train_and_notify(uid, imgs))
-
-@dp.message(Command("lora_on"))
-async def lora_on(m: Message):
-    uid = m.from_user.id
-    info = USER_LORA.get(uid, {})
-    # включаем и для finetune_id, и для url-варианта
-    if not (info.get("finetune_id") or info.get("url")):
-        return await m.answer("LoRA/finetune ещё не задан. Сначала /train или /set_finetune <id>.")
-    info["enabled"] = True
-    info["status"] = info.get("status", "ready")
-    USER_LORA[uid] = info
-    await m.answer("LoRA/finetune включён ✅")
-
-@dp.message(Command("lora_off"))
-async def lora_off(m: Message):
-    uid = m.from_user.id
-    info = USER_LORA.get(uid, {})
-    info["enabled"] = False
-    USER_LORA[uid] = info
-    await m.answer("LoRA/finetune выключен ⛔️")
-
-@dp.message(Command("set_finetune"))
-async def set_finetune(m: Message):
-    uid = m.from_user.id
-    parts = (m.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        return await m.answer("Использование: /set_finetune &lt;finetune_id&gt;")
-    fid = parts[1].strip()
-    USER_LORA[uid] = {"finetune_id": fid, "trigger": f"user_{uid}", "enabled": True, "status": "ready"}
-    await m.answer("✅ finetune_id сохранён и включён. Режим FLUX → /styles.")
-
-# Собираем изображения в датасет (как файлы)
-@dp.message(F.content_type == ContentType.DOCUMENT, F.document.mime_type.in_({"image/jpeg","image/png"}))
-async def collect_train_images(m: Message):
-    uid = m.from_user.id
-    if uid not in USER_TRAIN_SET:
-        return  # игнор, если не /train
-    b = await _download_as_bytes(m)
-    USER_TRAIN_SET[uid].append(b)
-    await m.answer(f"Добавлено фото в датасет. Сейчас: {len(USER_TRAIN_SET[uid])} шт.")
-
-# Фолбэк (диагностика)
-@dp.message()
-async def fallback(m: Message):
-    txt = (m.text or m.caption or "").strip()
-    await m.answer("Я здесь 👋 Пришли фото (лучше как файл), затем /styles. Режимы: /modes  |  Справка: /start")
-    logging.info(f"Fallback update: content_type={m.content_type!r} text={txt!r}")
-
-# ===================== MAIN =====================
+# ----------------------------
+# Entry
+# ----------------------------
 async def main():
-    logging.info("Starting bot polling…")
+    print("Bot is running…")
     await dp.start_polling(bot)
 
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot stopped.")
