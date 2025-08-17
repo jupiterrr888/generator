@@ -342,11 +342,13 @@ async def on_engine(call: CallbackQuery, state: FSMContext):
     await state.update_data(session=session.__dict__)
 
     engine_name = "InstantID / SDXL" if engine == "instantid" else "FLUX ID (PuLID)"
-    text = (f"Движок: <b>{engine_name}</b>
-"
-        "Выбери стиль или нажми на пак:")
+    text = (
+        f"Движок: <b>{engine_name}</b>\n"
+        "Выбери стиль или нажми на пак:"
+    )
     await call.message.answer(text, reply_markup=style_kb(include_pack=True))
     await call.answer()
+
 
 
 @dp.callback_query(F.data.startswith("style:"))
