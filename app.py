@@ -332,7 +332,7 @@ async def on_photo(message: Message, state: FSMContext):
 
 
 
-@dp.callback_query(F.data.startswith("engine:"))
+@@dp.callback_query(F.data.startswith("engine:"))
 async def on_engine(call: CallbackQuery, state: FSMContext):
     engine = call.data.split(":", 1)[1]
     data = await state.get_data()
@@ -341,9 +341,12 @@ async def on_engine(call: CallbackQuery, state: FSMContext):
     await state.update_data(session=session.__dict__)
 
     engine_name = "InstantID / SDXL" if engine == "instantid" else "FLUX ID (PuLID)"
-text = (f"Движок: <b>{engine_name}</b>\n"
-        "Выбери стиль или нажми на пак:")
-await call.message.answer(text, reply_markup=style_kb(include_pack=True))
+    text = (
+        f"Движок: <b>{engine_name}</b>\n"
+        "Выбери стиль или нажми на пак:"
+    )
+    await call.message.answer(text, reply_markup=style_kb(include_pack=True))
+    await call.answer()
 
 
 
