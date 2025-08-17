@@ -323,14 +323,14 @@ async def on_photo(message: Message, state: FSMContext):
     session = UserSession(ref_image_url=image_url)
     await state.update_data(session=session.__dict__)
 
-    text = (
+    await message.answer(
         "Фото получено! Выбери движок:
 "
         "• <b>InstantID / SDXL</b> — быстрый, предсказуемый (по умолчанию).
 "
-        "• <b>FLUX ID (PuLID)</b> — модный FLUX‑лук, иногда каприз к промптам."
+        "• <b>FLUX ID (PuLID)</b> — модный FLUX-лук, иногда каприз к промптам.",
+        reply_markup=engine_kb(),
     )
-    await message.answer(text, reply_markup=engine_kb())
 
 
 @dp.callback_query(F.data.startswith("engine:"))
