@@ -37,6 +37,8 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 import replicate
+import logging
+logging.basicConfig(level=logging.INFO)
 
 # ----------------------------
 # ENV & Clients
@@ -323,16 +325,15 @@ async def on_photo(message: Message, state: FSMContext):
     session = UserSession(ref_image_url=image_url)
     await state.update_data(session=session.__dict__)
 
-    text = (
-        "Фото получено! Выбери движок:\n"
-        "- InstantID / SDXL — быстрый, предсказуемый (по умолчанию).\n"
-        "- FLUX ID (PuLID) — модный FLUX-look, иногда каприз к промптам."
-    )
+    text = ("Фото получено! Выбери движок:
+"
+        "- InstantID / SDXL — быстрый, предсказуемый (по умолчанию).
+"
+        "- FLUX ID (PuLID) — модный FLUX-look, иногда каприз к промптам.")
     await message.answer(text, reply_markup=engine_kb())
 
 
-
-@@dp.callback_query(F.data.startswith("engine:"))
+@dp.callback_query(F.data.startswith("engine:"))
 async def on_engine(call: CallbackQuery, state: FSMContext):
     engine = call.data.split(":", 1)[1]
     data = await state.get_data()
@@ -341,13 +342,11 @@ async def on_engine(call: CallbackQuery, state: FSMContext):
     await state.update_data(session=session.__dict__)
 
     engine_name = "InstantID / SDXL" if engine == "instantid" else "FLUX ID (PuLID)"
-    text = (
-        f"Движок: <b>{engine_name}</b>\n"
-        "Выбери стиль или нажми на пак:"
-    )
+    text = (f"Движок: <b>{engine_name}</b>
+"
+        "Выбери стиль или нажми на пак:")
     await call.message.answer(text, reply_markup=style_kb(include_pack=True))
     await call.answer()
-
 
 
 @dp.callback_query(F.data.startswith("style:"))
@@ -423,7 +422,7 @@ async def on_pack(call: CallbackQuery, state: FSMContext):
 # Entry
 # ----------------------------
 async def main():
-    print("Bot is running…")
+    print("Bot is running…", flush=True)
     await dp.start_polling(bot)
 
 
