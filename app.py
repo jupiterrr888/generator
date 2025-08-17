@@ -324,12 +324,13 @@ async def on_photo(message: Message, state: FSMContext):
     await state.update_data(session=session.__dict__)
 
     text = (
-        "Фото получено! Выбери движок:\n"
-        "- InstantID / SDXL — быстрый, предсказуемый (по умолчанию).\n"
+        "Фото получено! Выбери движок:
+"
+        "- InstantID / SDXL — быстрый, предсказуемый (по умолчанию).
+"
         "- FLUX ID (PuLID) — модный FLUX-look, иногда каприз к промптам."
     )
     await message.answer(text, reply_markup=engine_kb())
-
 
 
 @dp.callback_query(F.data.startswith("engine:"))
@@ -340,12 +341,11 @@ async def on_engine(call: CallbackQuery, state: FSMContext):
     session.engine = engine
     await state.update_data(session=session.__dict__)
 
-    await call.message.answer(
-        f"Движок: <b>{'InstantID / SDXL' if engine=='instantid' else 'FLUX ID (PuLID)'}</b>
+    engine_name = "InstantID / SDXL" if engine == "instantid" else "FLUX ID (PuLID)"
+text = (f"Движок: <b>{engine_name}</b>
 "
-        "Выбери стиль или нажми на пак:",
-        reply_markup=style_kb(include_pack=True),
-    )
+        "Выбери стиль или нажми на пак:")
+await call.message.answer(text, reply_markup=style_kb(include_pack=True))
     await call.answer()
 
 
