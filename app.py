@@ -29,7 +29,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 MODEL_INSTANTID = os.getenv("REPLICATE_MODEL_INSTANTID", "")
-MODEL_PULID = os.getenv("REPLICATE_MODEL_PULID", "bytedance/flux-pulid:latest")
 
 if not BOT_TOKEN:
     raise SystemExit("Please set BOT_TOKEN in .env")
@@ -43,7 +42,7 @@ replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 # ----------------------------
 # Styles
 # ----------------------------
-STYLES = Dict[str, str] = {
+STYLES: Dict[str, str] = {
     "cinematic": "award-winning cinematic portrait, 85mm f/1.8 look, shallow depth of field, creamy bokeh, dramatic key light, rich filmic color grade, subtle grain, volumetric atmosphere, natural skin texture",
     "film35": "authentic 35mm film photograph, Portra-style color, fine grain, halation bloom, gentle contrast, true-to-life skin tones, slight vignette",
     "editorial_bw": "high-end editorial black & white portrait, soft directional light, deep tonality, silver-gelatin look, crisp micro-contrast, seamless studio backdrop, timeless aesthetic",
@@ -70,10 +69,6 @@ STYLES = Dict[str, str] = {
     "minimal_mag": "minimalist editorial layout, generous negative space, elegant typography, restrained palette, balanced composition"
 }
 
-# (опционально) общий негативный промпт
-NEGATIVE = "low-res, harsh flash, overexposed, underexposed, plastic skin, oversharpened, artifacts, watermark, text, logo, extra fingers, deformed hands, cross-eye, duplicate, blur"
-
-
 PACKS: Dict[str, List[str]] = {
     "starter10": [
         "cinematic", "cyberpunk", "fashion", "watercolor_ink", "oil_impasto",
@@ -95,9 +90,7 @@ PACKS: Dict[str, List[str]] = {
 # ----------------------------
 def engine_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    if MODEL_INSTANTID:
-        kb.button(text="InstantID / SDXL", callback_data="engine:instantid")
-    kb.button(text="FLUX ID (PuLID)", callback_data="engine:pulid")
+    kb.button(text="InstantID / SDXL", callback_data="engine:instantid")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -128,56 +121,6 @@ def _replicate_run(model: str, inputs: dict, *, flatten: bool = True):
         return out[0]
     return out
 
-def gen_pulid(
-    image_url: str,
-    style_prompt: str,
-    seed: int = 0,
-    w: int = 1024,
-    h: int = 1024,
-    num_outputs: int = 1,
-    start_step: int = 0,
-    id_weight: float = 1.0,
-    guidance_scale: float = 4.0,
-    num_steps: int = 20,
-    true_cfg: float = 1.0,
-    output_format: str = "png",
-    output_quality: int = 90,
-    max_sequence_length: int = 128,
-    model_slug: str = MODEL_PULID,
-) -> List[str]:
-    prompt = f"{style_prompt}, detailed facial features, flux aesthetic, crisp details"
-    negative = "low quality, distorted face, bad proportions, jpeg artifacts, blurry"
-    inputs = {
-        "main_face_image": image_url,
-        "prompt": prompt,
-        "negative_prompt": negative,
-        "width": w,
-        "height": h,
-        "num_steps": num_steps,
-        "start_step": start_step,
-        "guidance_scale": guidance_scale,
-        "id_weight": id_weight,
-        "seed": seed,
-        "true_cfg": true_cfg,
-        "max_sequence_length": max_sequence_length,
-        "output_format": output_format,
-        "output_quality": output_quality,
-        "num_outputs": num_outputs,
-    }
-    raw = _replicate_run(model_slug, inputs, flatten=(num_outputs == 1))
-    if isinstance(raw, list):
-        urls: List[str] = []
-        for item in raw:
-            try:
-                urls.append(item.url())
-            except Exception:
-                urls.append(str(item))
-        return urls
-    try:
-        return [raw.url()]  # type: ignore[attr-defined]
-    except Exception:
-        return [str(raw)]
-
 def gen_instantid_v2(
     image_url: str,
     style_prompt: str,
@@ -201,7 +144,7 @@ def gen_instantid_v2(
 @dataclass
 class UserSession:
     ref_image_url: str = ""
-    engine: str = "instantid"  # or "pulid"
+    engine: str = "instantid"  
     width: int = 1024
     height: int = 1024
 
@@ -223,13 +166,10 @@ async def generate_single(
     variations: int = 1,
 ) -> List[str]:
     style_prompt = STYLES[style_key]
-    if engine == "instantid":
-        if not MODEL_INSTANTID:
-            raise RuntimeError("InstantID engine not configured. Set REPLICATE_MODEL_INSTANTID.")
-        url = await asyncio.to_thread(gen_instantid_v2, image_url, style_prompt)
-        return [url]
-    urls = await asyncio.to_thread(gen_pulid, image_url, style_prompt, seed, w, h, variations)
-    return urls
+    if not MODEL_INSTANTID:
+        raise RuntimeError("InstantID engine not configured. Set REPLICATE_MODEL_INSTANTID.")
+    url = await asyncio.to_thread(gen_instantid_v2, image_url, style_prompt)
+    return [url]
 
 async def generate_pack(
     engine: str,
@@ -266,7 +206,6 @@ async def on_photo(message: Message, state: FSMContext):
     text = (
         "Фото получено! Выбери движок:\n"
         "- InstantID / SDXL — быстрый, предсказуемый (по умолчанию).\n"
-        "- FLUX ID (PuLID) — модный FLUX-look, иногда каприз к промптам."
     )
     await message.answer(text, reply_markup=engine_kb())
 
@@ -278,7 +217,7 @@ async def on_engine(call: CallbackQuery, state: FSMContext):
     session.engine = engine
     await state.update_data(session=session.__dict__)
 
-    engine_name = "InstantID / SDXL" if engine == "instantid" else "FLUX ID (PuLID)"
+    engine_name = "InstantID / SDXL"
     text = (f"Движок: <b>{engine_name}</b>\n"
             "Выбери стиль или нажми на пак:")
     await call.message.answer(text, reply_markup=style_kb(include_pack=True))
