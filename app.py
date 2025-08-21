@@ -52,32 +52,36 @@ replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
 # ----------------------------
 # Styles
 # ----------------------------
-STYLES: Dict[str, str] = {
-    "cinematic": "dramatic cinematic portrait, film still, shallow depth of field, 85mm, bokeh, rich color grading",
-    "film35": "35mm film photo look, subtle grain, natural skin tones, halation",
-    "editorial_bw": "high-end editorial black and white, soft contrast, fine tonality, studio quality",
-    "headshot_linkedin": "clean corporate headshot, soft key light, neutral background, natural retouch, professional",
-    "fashion": "glossy fashion editorial, studio flash, beauty lighting, magazine cover aesthetic, high detail skin",
-    "beauty_soft": "beauty portrait, softbox light, smooth gradients, delicate skin texture",
-    "oil_impasto": "oil painting impasto, thick textured brush strokes, museum lighting, intricate details",
-    "watercolor_ink": "watercolor and ink, paper texture, soft bleed, hand-drawn outlines",
-    "pencil_drawing": "fine graphite pencil drawing, cross-hatching, paper texture, realistic",
-    "pastel_dream": "soft pastel painting, velvety texture, gentle transitions, fine art look",
-    "comic_halftone": "bold comic illustration, halftone shading, inking lines, print texture",
-    "poster_pop": "bold poster design, geometric shapes, clean vectors, modern pop-graphic style",
-    "sticker_cutout": "sticker style, white cutout border, flat shading, playful",
-    "clay_3d": "3d clay sculpt render, single key light, subtle subsurface scattering, matte clay material",
-    "toon_3d_clean": "clean 3D toon render, simple materials, soft GI, smooth edges",
-    "vaporwave": "80s retrofuturism vaporwave, neon gradients, grid horizon, palm trees",
-    "y2k_gloss": "Y2K glossy aesthetic, chrome accents, plastic sheen, iridescent",
-    "cyberpunk": "cyberpunk neon portrait, rainy night, neon reflections, holographic HUD, high detail, futuristic vibes",
-    "steampunk": "ornate brass and leather, valves, patina, vintage workshop ambiance",
-    "dark_fantasy": "dark fantasy portrait, atmospheric fog, dramatic rim light, epic mood",
-    "nature_fineart": "fine art natural setting, soft overcast light, shallow depth, gentle color palette",
-    "desert_gold": "golden desert light, warm sunset tones, dust haze, cinematic framing",
-    "isometric": "isometric game art render, soft global illumination, clean edges, subtle shadows",
-    "minimal_mag": "minimal editorial layout, lots of negative space, typography-driven composition",
+STYLES = Dict[str, str] = {
+    "cinematic": "award-winning cinematic portrait, 85mm f/1.8 look, shallow depth of field, creamy bokeh, dramatic key light, rich filmic color grade, subtle grain, volumetric atmosphere, natural skin texture",
+    "film35": "authentic 35mm film photograph, Portra-style color, fine grain, halation bloom, gentle contrast, true-to-life skin tones, slight vignette",
+    "editorial_bw": "high-end editorial black & white portrait, soft directional light, deep tonality, silver-gelatin look, crisp micro-contrast, seamless studio backdrop, timeless aesthetic",
+    "headshot_linkedin": "clean corporate headshot, flattering soft key + fill, neutral seamless background, accurate skin tone, light natural retouch, sharp eyes, friendly confident expression",
+    "fashion": "glossy fashion editorial photo, beauty dish with rim light, studio set, precise makeup, high micro-detail, magazine cover polish, luxury styling",
+    "beauty_soft": "beauty portrait close-up, large softbox wrap lighting, luminous complexion, delicate pore-level texture, airy pastel palette, subtle dodge & burn feel",
+    "oil_impasto": "fine-art oil painting portrait, pronounced impasto, visible brushwork, layered pigments, chiaroscuro lighting, museum display mood",
+    "watercolor_ink": "mixed-media watercolor & ink illustration, cold-press paper texture, controlled bleed, elegant linework, soft washes, hand-drawn feel",
+    "pencil_drawing": "hyper-real graphite pencil drawing, fine cross-hatching, visible paper tooth, precise shading, classical life-drawing study",
+    "pastel_dream": "soft pastel fine-art portrait, velvety chalk texture, gentle gradients, muted palette, romantic haze",
+    "comic_halftone": "bold comic book panel, crisp ink lines, Ben-Day halftone shading, dynamic framing, screen-print texture",
+    "poster_pop": "modern pop-graphic poster, clean vectors, geometric forms, striking color blocks, tight Swiss-grid composition",
+    "sticker_cutout": "die-cut sticker look, white stroke border, flat shading, bold silhouette, playful kawaii vibe",
+    "clay_3d": "studio 3D clay render, matte sculpted clay, single area light, soft subsurface scattering, seamless cyclorama",
+    "toon_3d_clean": "clean toon-shaded 3D render, smooth surfaces, simple PBR materials, soft GI, rounded edges, tidy outlines",
+    "vaporwave": "retro-futurist vaporwave scene, neon gradients, chrome typography, grid horizon, palm trees, nostalgic 80s ambiance",
+    "y2k_gloss": "Y2K glossy tech aesthetic, pearlescent plastic, chrome accents, lens-flare gleam, iridescent highlights",
+    "cyberpunk": "cinematic cyberpunk portrait, rainy neon street, holographic HUD accents, moody rim lights, reflective wet surfaces, intricate details",
+    "steampunk": "ornate steampunk portrait, brass & leather fittings, cogs and valves, warm workshop glow, aged patina, Victorian flavor",
+    "dark_fantasy": "epic dark fantasy portrait, drifting fog, dramatic rim light, gothic atmosphere, intricate armor, cinematic depth",
+    "nature_fineart": "fine-art environmental portrait, overcast soft light, shallow DOF, natural color harmony, gentle breeze, calm mood",
+    "desert_gold": "golden-hour desert portrait, warm backlight, dust haze, long shadows, sun flare, wide-open aperture glint",
+    "isometric": "isometric game-style render, pristine edges, soft global illumination, miniature diorama feel, subtle contact shadows",
+    "minimal_mag": "minimalist editorial layout, generous negative space, elegant typography, restrained palette, balanced composition"
 }
+
+# (опционально) общий негативный промпт
+NEGATIVE = "low-res, harsh flash, overexposed, underexposed, plastic skin, oversharpened, artifacts, watermark, text, logo, extra fingers, deformed hands, cross-eye, duplicate, blur"
+
 
 PACKS: Dict[str, List[str]] = {
     "starter10": [
