@@ -1,12 +1,3 @@
-"""
-TG Avatar Bot: InstantID (SDXL) + FLUX-dev PuLID
-
-ENV:
-  BOT_TOKEN=...
-  REPLICATE_API_TOKEN=...
-  REPLICATE_MODEL_INSTANTID=grandlineai/instant-id-photorealistic:03914a0c3326bf44383d0cd84b06822618af879229ce5d1d53bef38d93b68279
-  REPLICATE_MODEL_PULID=bytedance/flux-pulid:latest
-"""
 
 import asyncio
 import logging
