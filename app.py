@@ -70,7 +70,7 @@ STYLES: Dict[str, str] = {
     "toon_3d_clean": "clean 3D toon render, simple materials, soft GI, smooth edges",
     "vaporwave": "80s retrofuturism vaporwave, neon gradients, grid horizon, palm trees",
     "y2k_gloss": "Y2K glossy aesthetic, chrome accents, plastic sheen, iridescent",
-    "cyberpunk": "moody neon city at night, rain reflections, high contrast, dystopian vibes",
+    "cyberpunk": "cyberpunk neon portrait, rainy night, neon reflections, holographic HUD, high detail, futuristic vibes",
     "steampunk": "ornate brass and leather, valves, patina, vintage workshop ambiance",
     "dark_fantasy": "dark fantasy portrait, atmospheric fog, dramatic rim light, epic mood",
     "nature_fineart": "fine art natural setting, soft overcast light, shallow depth, gentle color palette",
